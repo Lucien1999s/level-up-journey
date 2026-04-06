@@ -3,3 +3,5 @@ uvicorn[standard]
 python-dotenv
 langgraph
 langchain-google-genai
+sqlalchemy
+psycopg2-binary

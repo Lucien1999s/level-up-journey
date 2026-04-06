@@ -1,2 +1,39 @@
-services: {}
+services:
+  db:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-level_up_journey}
+      POSTGRES_USER: ${POSTGRES_USER:-levelup}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-levelup}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-levelup} -d ${POSTGRES_DB:-level_up_journey}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
 
+  backend:
+    build:
+      context: ./backend
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      APP_NAME: level-up-journey-backend
+      APP_HOST: 0.0.0.0
+      APP_PORT: 8000
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-2.5-flash}
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY}
+      DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER:-levelup}:${POSTGRES_PASSWORD:-levelup}@db:5432/${POSTGRES_DB:-level_up_journey}
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend:/app
+
+volumes:
+  postgres_data:
