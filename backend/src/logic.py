@@ -62,6 +62,15 @@ def _random_badge_tier() -> str:
     return choice(BADGE_TIERS)
 
 
+def _scaled_base_exp(level: int) -> int:
+    return round(100 * (1 + (max(level, 1) / 100)))
+
+
+def _scaled_bonus_exp(level: int, bonus_exp: int) -> int:
+    level_factor = (1 + (max(level, 1) / 100)) * 2
+    return round(bonus_exp * level_factor)
+
+
 def _load_paths_query():
     return (
         select(PathModel)
@@ -489,7 +498,11 @@ def process_action_log(session: Session, user_email: str, request: ActionLogRequ
             continue
 
         previous_level = path.level
-        exp_gain = 100 + plan.bonus_exp
+        exp_gain = (
+            0
+            if plan.bonus_exp == 0
+            else _scaled_base_exp(previous_level) + _scaled_bonus_exp(previous_level, plan.bonus_exp)
+        )
         path.total_exp += exp_gain
         path.level = level_for_total_xp(path.total_exp)
 

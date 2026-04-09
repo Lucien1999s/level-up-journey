@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useEffect, useRef, useState } from "react";
 
 import {
   addBadge,
@@ -24,7 +24,7 @@ import {
   setStoredLocale,
 } from "./lib/auth";
 import { text } from "./lib/i18n";
-import { getLevelProgress, getRankTitle } from "./lib/leveling";
+import { getLevelProgress, getMilestones, getRankTitle } from "./lib/leveling";
 import { exportPathPdf } from "./lib/pdf";
 import type {
   ActionLogResponse,
@@ -68,6 +68,7 @@ const proficiencyLabels: Record<Locale, Record<DomainProficiencyRating, string>>
 };
 
 const badgeTiers: BadgeTier[] = ["bronze", "silver", "gold"];
+const BADGES_PER_PAGE = 3;
 
 function randomBadgeTier(): BadgeTier {
   return badgeTiers[Math.floor(Math.random() * badgeTiers.length)] ?? "bronze";
@@ -98,13 +99,15 @@ function getPathMonogram(name: string) {
 function Modal({
   children,
   onClose,
+  className,
 }: {
   children: React.ReactNode;
   onClose: () => void;
+  className?: string;
 }) {
   return (
     <div className="modal-backdrop" onClick={onClose}>
-      <div className="modal-shell" onClick={(event) => event.stopPropagation()}>
+      <div className={className ? `modal-shell ${className}` : "modal-shell"} onClick={(event) => event.stopPropagation()}>
         <button className="modal-close" onClick={onClose} type="button" aria-label="close">
           ×
         </button>
@@ -115,6 +118,7 @@ function Modal({
 }
 
 function App() {
+  const levelTrackScrollRef = useRef<HTMLDivElement | null>(null);
   const [locale, setLocale] = useState<Locale>(getStoredLocale());
   const [authMode, setAuthMode] = useState<AuthMode>("login");
   const [sessionEmail, setSessionEmail] = useState<string | null>(getSessionEmail());
@@ -149,6 +153,8 @@ function App() {
   });
   const [actionLog, setActionLog] = useState("");
   const [lastActionUpdate, setLastActionUpdate] = useState<ActionLogResponse | null>(null);
+  const [actionResultOpen, setActionResultOpen] = useState(false);
+  const [levelTrackOpen, setLevelTrackOpen] = useState(false);
   const [accountForm, setAccountForm] = useState({
     current_password: "",
     new_email: "",
@@ -172,6 +178,7 @@ function App() {
     reason: "",
   });
   const [badgeVisibility, setBadgeVisibility] = useState<"pending" | "completed">("pending");
+  const [badgePage, setBadgePage] = useState(0);
 
   const [domainModal, setDomainModal] = useState<{
     domain: Domain | null;
@@ -202,9 +209,25 @@ function App() {
           return left.name.localeCompare(right.name);
         })
     : [];
+  const badgePageCount = Math.max(1, Math.ceil(visibleBadges.length / BADGES_PER_PAGE));
+  const currentBadgePage = Math.min(badgePage, badgePageCount - 1);
+  const pagedBadges = visibleBadges.slice(
+    currentBadgePage * BADGES_PER_PAGE,
+    currentBadgePage * BADGES_PER_PAGE + BADGES_PER_PAGE,
+  );
   const busyLabel = locale === "zh" ? "AI 正在處理..." : "AI is processing...";
   const creatingLabel = locale === "zh" ? "AI 正在建立路線..." : "AI is building the path...";
   const syncingLabel = locale === "zh" ? "AI 正在同步資料..." : "AI is syncing data...";
+  const levelTrack = Array.from({ length: 100 }, (_, index) => {
+    const level = index + 1;
+    const milestone = level === 1 || level % 10 === 0;
+    return {
+      level,
+      title: milestone ? getRankTitle(level, locale) : "",
+      milestone,
+    };
+  });
+  const milestoneLevels = getMilestones(locale);
   useEffect(() => {
     setStoredLocale(locale);
   }, [locale]);
@@ -214,6 +237,20 @@ function App() {
     setAccountForm({ current_password: "", new_email: sessionEmail });
     setPasswordForm({ current_password: "", new_password: "", confirm_password: "" });
   }, [sessionEmail]);
+
+  useEffect(() => {
+    setBadgePage(0);
+  }, [selectedPathId, badgeVisibility]);
+
+  useEffect(() => {
+    if (!levelTrackOpen || !selectedPath) return;
+    const frame = window.requestAnimationFrame(() => {
+      const trackRoot = levelTrackScrollRef.current;
+      const currentNode = trackRoot?.querySelector<HTMLElement>("[data-current-level='true']");
+      currentNode?.scrollIntoView({ behavior: "smooth", block: "nearest", inline: "center" });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [levelTrackOpen, selectedPath]);
 
   useEffect(() => {
     if (!sessionEmail) return;
@@ -368,6 +405,7 @@ function App() {
     try {
       const result = await processActionLog({ action_log: actionLog, lang: locale });
       setLastActionUpdate(result);
+      setActionResultOpen(true);
       setActionLog("");
       await loadPaths();
     } catch (error) {
@@ -773,10 +811,16 @@ function App() {
                   </div>
 
                   <div className="summary-main">
-                    <div className="hero-emblem compact">
+                    <button
+                      className="hero-emblem compact hero-emblem-button"
+                      type="button"
+                      onClick={() => setLevelTrackOpen(true)}
+                      aria-label={t("levelAtlas")}
+                      title={t("levelAtlas")}
+                    >
                       <span>{selectedPath.path.level}</span>
                       <small>{t("level")}</small>
-                    </div>
+                    </button>
 
                     <div className="overview-content">
                       <div className="hero-metrics">
@@ -849,6 +893,28 @@ function App() {
                       <h3>{t("badges")}</h3>
                     </div>
                     <div className="badge-toolbar">
+                      {visibleBadges.length > BADGES_PER_PAGE ? (
+                        <div className="badge-pagination badge-pagination-toolbar">
+                          <button
+                            className="badge-page-button"
+                            type="button"
+                            onClick={() => setBadgePage((current) => Math.max(0, current - 1))}
+                            disabled={currentBadgePage === 0}
+                            aria-label={locale === "zh" ? "上一頁" : "Previous badges"}
+                          >
+                            &lt;
+                          </button>
+                          <button
+                            className="badge-page-button"
+                            type="button"
+                            onClick={() => setBadgePage((current) => Math.min(badgePageCount - 1, current + 1))}
+                            disabled={currentBadgePage >= badgePageCount - 1}
+                            aria-label={locale === "zh" ? "下一頁" : "Next badges"}
+                          >
+                            &gt;
+                          </button>
+                        </div>
+                      ) : null}
                       <div className="badge-filter-toggle" aria-label={t("badgeCompleted")}>
                         <button
                           className={badgeVisibility === "pending" ? "badge-filter-chip active" : "badge-filter-chip"}
@@ -881,9 +947,9 @@ function App() {
                     </div>
                   </div>
 
-                  <div className="badge-flow-scroll">
+                  <div className="badge-flow-page">
                     {visibleBadges.length ? (
-                      visibleBadges.map((badge) => (
+                      pagedBadges.map((badge) => (
                         <button
                           className="badge-token"
                           key={badge.id}
@@ -917,17 +983,6 @@ function App() {
                     </div>
                   </div>
 
-                  {lastActionUpdate?.path_updates.length ? (
-                    <div className="action-feedback">
-                      <strong>
-                        {lastActionUpdate.path_updates[0].path_name}
-                        {" · "}
-                        +{lastActionUpdate.path_updates[0].exp_gain} XP
-                      </strong>
-                      <p>{lastActionUpdate.path_updates[0].feedback}</p>
-                    </div>
-                  ) : null}
-
                   <form className="action-form anchored" onSubmit={handleActionSubmit}>
                     <textarea
                       placeholder={t("actionPlaceholder")}
@@ -942,12 +997,16 @@ function App() {
                         title={actionBusy ? busyLabel : t("submitAction")}
                         type="submit"
                       >
-                        <svg aria-hidden="true" viewBox="0 0 24 24">
-                          <path
-                            d="M3 11.5L20 4l-5.5 16-3.5-6-6-2.5zm6.5 1.1l3 1.3 2.2-6.4-5.2 5.1z"
-                            fill="currentColor"
-                          />
-                        </svg>
+                        {actionBusy ? (
+                          <span className="action-send-spinner" aria-hidden="true" />
+                        ) : (
+                          <svg aria-hidden="true" viewBox="0 0 24 24">
+                            <path
+                              d="M3 11.5L20 4l-5.5 16-3.5-6-6-2.5zm6.5 1.1l3 1.3 2.2-6.4-5.2 5.1z"
+                              fill="currentColor"
+                            />
+                          </svg>
+                        )}
                       </button>
                     </div>
                   </form>
@@ -972,12 +1031,12 @@ function App() {
       </div>
 
       {settingsOpen ? (
-        <Modal onClose={() => setSettingsOpen(false)}>
+        <Modal className="settings-modal" onClose={() => setSettingsOpen(false)}>
           <div className="modal-section settings-hero">
             <h2>{t("settings")}</h2>
           </div>
           <div className="settings-layout">
-            <section className="settings-card settings-card-compact">
+            <section className="settings-card settings-card-compact settings-language-card">
               <div className="settings-row-head">
                 <h3>{t("language")}</h3>
               </div>
@@ -1132,11 +1191,143 @@ function App() {
         </Modal>
       ) : null}
 
+      {actionResultOpen && lastActionUpdate?.path_updates.length ? (
+        <Modal className="action-result-modal" onClose={() => setActionResultOpen(false)}>
+          <div className="modal-section action-result-head">
+            <h2>{t("journeyUpdate")}</h2>
+          </div>
+          <div className="action-result-list">
+            {lastActionUpdate.path_updates.map((pathUpdate) => {
+              const relatedBadges = lastActionUpdate.badge_updates.filter(
+                (badgeUpdate) => badgeUpdate.path_id === pathUpdate.path_id,
+              );
+
+              return (
+                <section className="action-result-card" key={`${pathUpdate.path_id}-${pathUpdate.new_total_exp}`}>
+                  <div className="action-result-top">
+                    <div>
+                      <h3>{pathUpdate.path_name}</h3>
+                    </div>
+                    <div className="action-result-xp">+{pathUpdate.exp_gain} XP</div>
+                  </div>
+
+                  <div className="action-result-metrics">
+                    <div className="result-pill">
+                      <span>{t("levelShift")}</span>
+                      <strong>
+                        {pathUpdate.previous_level} → {pathUpdate.new_level}
+                      </strong>
+                    </div>
+                    <div className="result-pill">
+                      <span>{t("totalXp")}</span>
+                      <strong>{pathUpdate.new_total_exp.toLocaleString()}</strong>
+                    </div>
+                  </div>
+
+                  <div className="action-result-section">
+                    <span className="action-result-label">{t("overallReview")}</span>
+                    <p>{pathUpdate.feedback}</p>
+                  </div>
+
+                  <div className="action-result-section">
+                    <span className="action-result-label">{t("skillChanges")}</span>
+                    {pathUpdate.domain_updates.length ? (
+                      <div className="action-change-list">
+                        {pathUpdate.domain_updates.map((domainUpdate) => (
+                          <div className="action-change-item" key={`${pathUpdate.path_id}-${domainUpdate.name}`}>
+                            <strong>{domainUpdate.name}</strong>
+                            <span>{getProficiencyLabel(domainUpdate.proficiency_rating, locale)}</span>
+                            <p>{domainUpdate.proficiency_reason}</p>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="action-empty">{t("noSkillChanges")}</p>
+                    )}
+                  </div>
+
+                  <div className="action-result-section">
+                    <span className="action-result-label">{t("badgeChanges")}</span>
+                    {relatedBadges.length ? (
+                      <div className="action-change-list">
+                        {relatedBadges.map((badgeUpdate) => (
+                          <div className="action-change-item badge" key={badgeUpdate.badge_id}>
+                            <strong>{badgeUpdate.badge_name}</strong>
+                            <span>
+                              {badgeUpdate.previous_progress}% → {badgeUpdate.new_progress}%
+                            </span>
+                            <p>{badgeUpdate.reason}</p>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="action-empty">{t("noBadgeChanges")}</p>
+                    )}
+                  </div>
+                </section>
+              );
+            })}
+          </div>
+        </Modal>
+      ) : null}
+
+      {levelTrackOpen && selectedPath ? (
+        <Modal className="level-track-modal" onClose={() => setLevelTrackOpen(false)}>
+          <div className="modal-section level-track-head">
+            <h2>{t("levelAtlas")}</h2>
+            <div className="level-track-summary">
+              <div className="level-track-summary-pill">
+                <span>{t("currentPosition")}</span>
+                <strong>
+                  Lv {selectedPath.path.level} · {getRankTitle(selectedPath.path.level, locale)}
+                </strong>
+              </div>
+              <div className="level-track-summary-pill">
+                <span>{t("rankMilestones")}</span>
+                <strong>{milestoneLevels.length}</strong>
+              </div>
+            </div>
+          </div>
+
+          <div className="level-track-scroll" ref={levelTrackScrollRef}>
+            <div className="level-track-rail">
+              {levelTrack.map((entry) => {
+                const isCurrent = entry.level === selectedPath.path.level;
+                const isPassed = entry.level < selectedPath.path.level;
+                return (
+                  <div
+                    className={
+                      entry.milestone
+                        ? isCurrent
+                          ? "level-node milestone current"
+                          : isPassed
+                            ? "level-node milestone passed"
+                            : "level-node milestone"
+                        : isCurrent
+                          ? "level-node current"
+                          : isPassed
+                            ? "level-node passed"
+                            : "level-node"
+                    }
+                    key={entry.level}
+                    data-current-level={isCurrent ? "true" : undefined}
+                  >
+                    <div className="level-node-marker">
+                      <span>Lv {entry.level}</span>
+                    </div>
+                    {entry.milestone ? <strong>{entry.title}</strong> : <small>{entry.level}</small>}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </Modal>
+      ) : null}
+
       {createPathOpen ? (
-        <Modal onClose={() => setCreatePathOpen(false)}>
+        <Modal className="path-create-modal" onClose={() => setCreatePathOpen(false)}>
           <form className="modal-form" onSubmit={handleCreatePath}>
             <div className="modal-section">
-              <p className="panel-label">{t("createPath")}</p>
               <h2>{t("newPath")}</h2>
             </div>
             <label className="field">
@@ -1186,13 +1377,15 @@ function App() {
       ) : null}
 
       {pendingDeletePath ? (
-        <Modal onClose={() => setPendingDeletePath(null)}>
-          <div className="modal-section">
-            <p className="panel-label">{t("deletePath")}</p>
-            <h2>{pendingDeletePath.path.name}</h2>
-            <p>{t("confirmDeletePath")}</p>
+        <Modal className="delete-path-modal" onClose={() => setPendingDeletePath(null)}>
+          <div className="modal-section delete-path-head">
+            <h2>{t("deletePath")}</h2>
+            <div className="delete-path-card">
+              <strong>{pendingDeletePath.path.name}</strong>
+              <p>{t("confirmDeletePath")}</p>
+            </div>
           </div>
-          <div className="modal-actions">
+          <div className="modal-actions delete-path-actions">
             <button className="secondary-button" onClick={() => setPendingDeletePath(null)} type="button">
               {t("cancel")}
             </button>

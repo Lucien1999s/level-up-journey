@@ -143,7 +143,9 @@ Return only structured data for the requested schema.
 Task:
 - Judge only this one impacted path.
 - Assign a strict bonus_exp from 0 to 900.
-- The system will add a guaranteed base 100 exp separately, so bonus_exp should only reflect the extra value beyond that baseline.
+- If bonus_exp is 0, the system will add no exp at all.
+- If bonus_exp is above 0, the system will add a separate scaled base exp using 100 x (1 + current_level / 100), so bonus_exp should only reflect the extra value beyond that baseline.
+- The system will also multiply bonus_exp by 2 x (1 + current_level / 100), so bonus_exp should stay conservative because it will be amplified further by the level-based weight.
 - Be strict: routine or shallow work should get low bonus_exp.
 - Update only domains that show meaningful evidence from this action.
 - You may propose a new domain only when the action clearly introduces a sustained skill area not covered by existing domains.
