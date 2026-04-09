@@ -6,6 +6,10 @@
 docker-compose up --build -d
 ```
 
+## Frontend
+
+`http://localhost:5173`
+
 ## Swagger
 
 `http://localhost:8000/docs`

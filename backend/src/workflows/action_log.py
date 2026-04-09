@@ -61,6 +61,10 @@ class ActionRoutingResult(BaseModel):
     impacted_paths: list[MatchedActionBundle] = Field(default_factory=list)
 
 
+class ForcedActionRoutingResult(BaseModel):
+    impacted_path: MatchedActionBundle
+
+
 class DomainUpdatePlan(BaseModel):
     name: str = Field(..., min_length=1)
     proficiency_rating: DomainProficiencyRating
@@ -107,11 +111,26 @@ Return only structured data for the requested schema.
 
 Task:
 - Only match existing paths. Never create a new path.
-- Ignore unaffected paths entirely.
+- You must always choose the single best-fit existing path. matched_path is required in this product flow.
+- Ignore unaffected paths entirely, but never return an empty result.
 - For each impacted path, identify the existing domains that are clearly affected.
 - If no existing domain is a clear fit, return the path with an empty matched_domains list.
 - Include one concise action excerpt or summary for why this path is impacted.
 - Be conservative and avoid broad matching.
+- Write all user-facing text in the requested language from the `lang` field.
+""".strip()
+
+
+def build_forced_action_routing_instruction() -> str:
+    return f"""
+You must choose exactly one best-fit existing Level-Up Journey path for this action log.
+Return only structured data for the requested schema.
+
+Task:
+- Pick exactly one existing path. Never return none.
+- Never create a new path.
+- matched_domains may be empty if no existing domain clearly fits.
+- Include one concise excerpt or summary from the action log explaining why this path is the closest match.
 - Write all user-facing text in the requested language from the `lang` field.
 """.strip()
 
@@ -174,6 +193,32 @@ def build_workflow():
                 "path_catalog": catalog,
             },
         )
+
+        if not routing_result.impacted_paths:
+            if len(user_input.existing_paths) == 1:
+                routing_result = ActionRoutingResult(
+                    impacted_paths=[
+                        MatchedActionBundle(
+                            path_name=user_input.existing_paths[0].path.name,
+                            matched_domains=[],
+                            relevant_action_excerpt=user_input.action_log,
+                        )
+                    ]
+                )
+            else:
+                forced_result = invoke_structured_output(
+                    llm=llm,
+                    schema=ForcedActionRoutingResult,
+                    instruction=build_forced_action_routing_instruction(),
+                    payload={
+                        "action_log": user_input.action_log,
+                        "lang": user_input.lang,
+                        "path_catalog": catalog,
+                    },
+                )
+                routing_result = ActionRoutingResult(
+                    impacted_paths=[forced_result.impacted_path]
+                )
         return {"routing_result": routing_result}
 
     def fan_out_path_updates(state: ActionWorkflowState) -> list[Send]:

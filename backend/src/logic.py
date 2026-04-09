@@ -1,14 +1,22 @@
+from random import choice
+
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
 from src.leveling import cumulative_xp_for_level, level_for_total_xp, xp_to_next_level
-from src.models import BadgeModel, DomainModel, PathModel
+from src.models import BadgeModel, DomainModel, PathModel, UserModel
+from src.security import hash_password, verify_password
 from src.schemas import (
     ActionLogRequest,
     ActionLogResponse,
+    AccountUpdateRequest,
+    AuthLoginRequest,
+    AuthRegisterRequest,
+    AuthSessionResponse,
     BadgeActionUpdateResponse,
     BadgeCreateRequest,
     BadgeResponse,
+    BadgeTier,
     BadgeUpdateRequest,
     DomainActionUpdateResponse,
     DomainCreateRequest,
@@ -17,6 +25,7 @@ from src.schemas import (
     InitializePathRequest,
     JourneyDataResponse,
     MatchedActionGroupResponse,
+    PasswordUpdateRequest,
     PathActionUpdateResponse,
     PathDetailResponse,
     PathProgressResponse,
@@ -38,6 +47,21 @@ class NotFoundError(AppError):
     status_code = 404
 
 
+class UnauthorizedError(AppError):
+    status_code = 401
+
+
+BADGE_TIERS = (
+    BadgeTier.BRONZE.value,
+    BadgeTier.SILVER.value,
+    BadgeTier.GOLD.value,
+)
+
+
+def _random_badge_tier() -> str:
+    return choice(BADGE_TIERS)
+
+
 def _load_paths_query():
     return (
         select(PathModel)
@@ -49,22 +73,66 @@ def _load_paths_query():
     )
 
 
-def _get_path(session: Session, path_id: int) -> PathModel:
-    path = session.scalar(_load_paths_query().where(PathModel.id == path_id))
+def _get_user_by_email(session: Session, email: str) -> UserModel:
+    user = session.scalar(select(UserModel).where(UserModel.email == email))
+    if user is None:
+        raise UnauthorizedError("Account not found.")
+    return user
+
+
+def _claim_legacy_paths(session: Session, user: UserModel) -> None:
+    has_owned_paths = session.scalar(
+        select(PathModel.id).where(PathModel.user_id == user.id).limit(1)
+    )
+    if has_owned_paths is not None:
+        return
+
+    legacy_paths = session.scalars(
+        _load_paths_query().where(PathModel.user_id.is_(None))
+    ).all()
+    if not legacy_paths:
+        return
+
+    for path in legacy_paths:
+        path.user_id = user.id
+    session.commit()
+
+
+def _get_path(session: Session, user: UserModel, path_id: int) -> PathModel:
+    path = session.scalar(
+        _load_paths_query().where(
+            PathModel.id == path_id,
+            PathModel.user_id == user.id,
+        )
+    )
     if path is None:
         raise NotFoundError("Path not found.")
     return path
 
 
-def _get_badge(session: Session, badge_id: int) -> BadgeModel:
-    badge = session.get(BadgeModel, badge_id)
+def _get_badge(session: Session, user: UserModel, badge_id: int) -> BadgeModel:
+    badge = session.scalar(
+        select(BadgeModel)
+        .join(BadgeModel.path)
+        .where(
+            BadgeModel.id == badge_id,
+            PathModel.user_id == user.id,
+        )
+    )
     if badge is None:
         raise NotFoundError("Badge not found.")
     return badge
 
 
-def _get_domain(session: Session, domain_id: int) -> DomainModel:
-    domain = session.get(DomainModel, domain_id)
+def _get_domain(session: Session, user: UserModel, domain_id: int) -> DomainModel:
+    domain = session.scalar(
+        select(DomainModel)
+        .join(DomainModel.path)
+        .where(
+            DomainModel.id == domain_id,
+            PathModel.user_id == user.id,
+        )
+    )
     if domain is None:
         raise NotFoundError("Domain not found.")
     return domain
@@ -97,6 +165,7 @@ def _serialize_path(path: PathModel) -> PathDetailResponse:
                 id=badge.id,
                 name=badge.name,
                 type=badge.type,
+                tier=badge.tier,
                 progress=badge.progress,
                 is_completed=badge.is_completed,
                 reason=badge.reason,
@@ -110,14 +179,77 @@ def _path_to_snapshot(path: PathModel) -> PlayerPathSnapshot:
     return PlayerPathSnapshot.model_validate(_serialize_path(path).model_dump())
 
 
-def initialize_path(session: Session, request: InitializePathRequest) -> PathDetailResponse:
-    existing = session.scalar(select(PathModel).where(PathModel.name == request.route_name))
+def register_account(session: Session, request: AuthRegisterRequest) -> AuthSessionResponse:
+    existing = session.scalar(select(UserModel).where(UserModel.email == request.email))
+    if existing is not None:
+        raise ConflictError("This email is already registered.")
+
+    user = UserModel(
+        email=request.email,
+        password_hash=hash_password(request.password),
+    )
+    session.add(user)
+    session.commit()
+    session.refresh(user)
+    _claim_legacy_paths(session, user)
+    return AuthSessionResponse(email=user.email)
+
+
+def login_account(session: Session, request: AuthLoginRequest) -> AuthSessionResponse:
+    user = _get_user_by_email(session, request.email)
+    if not verify_password(request.password, user.password_hash):
+        raise UnauthorizedError("Invalid email or password.")
+
+    _claim_legacy_paths(session, user)
+    return AuthSessionResponse(email=user.email)
+
+
+def update_account_email(session: Session, request: AccountUpdateRequest) -> AuthSessionResponse:
+    user = _get_user_by_email(session, request.current_email)
+    if not verify_password(request.current_password, user.password_hash):
+        raise UnauthorizedError("Invalid current password.")
+
+    existing = session.scalar(
+        select(UserModel).where(
+            UserModel.email == request.new_email,
+            UserModel.id != user.id,
+        )
+    )
+    if existing is not None:
+        raise ConflictError("This email is already registered.")
+
+    user.email = request.new_email
+    session.commit()
+    session.refresh(user)
+    return AuthSessionResponse(email=user.email)
+
+
+def update_account_password(session: Session, request: PasswordUpdateRequest) -> AuthSessionResponse:
+    user = _get_user_by_email(session, request.email)
+    if not verify_password(request.current_password, user.password_hash):
+        raise UnauthorizedError("Invalid current password.")
+
+    user.password_hash = hash_password(request.new_password)
+    session.commit()
+    session.refresh(user)
+    return AuthSessionResponse(email=user.email)
+
+
+def initialize_path(session: Session, user_email: str, request: InitializePathRequest) -> PathDetailResponse:
+    user = _get_user_by_email(session, user_email)
+    existing = session.scalar(
+        select(PathModel).where(
+            PathModel.name == request.route_name,
+            PathModel.user_id == user.id,
+        )
+    )
     if existing is not None:
         raise ConflictError("A path with this name already exists.")
 
     draft = run_initialize_path_workflow(request)
 
     path = PathModel(
+        user_id=user.id,
         name=draft.path_name,
         current_status=request.current_status,
         past_achievements=request.past_achievements,
@@ -143,6 +275,7 @@ def initialize_path(session: Session, request: InitializePathRequest) -> PathDet
             BadgeModel(
                 name=badge.name,
                 type=badge.type.value,
+                tier=_random_badge_tier(),
                 progress=badge.progress,
                 is_completed=badge.progress == 100,
                 reason=badge.reason,
@@ -151,35 +284,48 @@ def initialize_path(session: Session, request: InitializePathRequest) -> PathDet
 
     session.commit()
     session.refresh(path)
-    path = _get_path(session, path.id)
+    path = _get_path(session, user, path.id)
     return _serialize_path(path)
 
 
-def get_all_paths(session: Session) -> JourneyDataResponse:
-    paths = session.scalars(_load_paths_query()).all()
+def get_all_paths(session: Session, user_email: str) -> JourneyDataResponse:
+    user = _get_user_by_email(session, user_email)
+    _claim_legacy_paths(session, user)
+    paths = session.scalars(_load_paths_query().where(PathModel.user_id == user.id)).all()
     return JourneyDataResponse(paths=[_serialize_path(path) for path in paths])
 
 
-def get_path_detail(session: Session, path_id: int) -> PathDetailResponse:
-    return _serialize_path(_get_path(session, path_id))
+def get_path_detail(session: Session, user_email: str, path_id: int) -> PathDetailResponse:
+    user = _get_user_by_email(session, user_email)
+    return _serialize_path(_get_path(session, user, path_id))
+
+
+def delete_path(session: Session, user_email: str, path_id: int) -> None:
+    user = _get_user_by_email(session, user_email)
+    path = _get_path(session, user, path_id)
+    session.delete(path)
+    session.commit()
 
 
 def update_path_progress(
     session: Session,
+    user_email: str,
     path_id: int,
     request: PathProgressUpdateRequest,
 ) -> PathDetailResponse:
-    path = _get_path(session, path_id)
+    user = _get_user_by_email(session, user_email)
+    path = _get_path(session, user, path_id)
     path.total_exp = request.total_exp
     path.level = level_for_total_xp(request.total_exp)
     session.commit()
     session.refresh(path)
-    path = _get_path(session, path.id)
+    path = _get_path(session, user, path.id)
     return _serialize_path(path)
 
 
-def add_badge(session: Session, path_id: int, request: BadgeCreateRequest) -> BadgeResponse:
-    path = _get_path(session, path_id)
+def add_badge(session: Session, user_email: str, path_id: int, request: BadgeCreateRequest) -> BadgeResponse:
+    user = _get_user_by_email(session, user_email)
+    path = _get_path(session, user, path_id)
     if any(badge.name == request.name for badge in path.badges):
         raise ConflictError("A badge with this name already exists on the path.")
 
@@ -187,6 +333,7 @@ def add_badge(session: Session, path_id: int, request: BadgeCreateRequest) -> Ba
         path_id=path.id,
         name=request.name,
         type=request.type.value,
+        tier=(request.tier.value if request.tier is not None else _random_badge_tier()),
         progress=request.progress,
         is_completed=request.progress == 100,
         reason=request.reason,
@@ -198,14 +345,16 @@ def add_badge(session: Session, path_id: int, request: BadgeCreateRequest) -> Ba
         id=badge.id,
         name=badge.name,
         type=badge.type,
+        tier=badge.tier,
         progress=badge.progress,
         is_completed=badge.is_completed,
         reason=badge.reason,
     )
 
 
-def update_badge(session: Session, badge_id: int, request: BadgeUpdateRequest) -> BadgeResponse:
-    badge = _get_badge(session, badge_id)
+def update_badge(session: Session, user_email: str, badge_id: int, request: BadgeUpdateRequest) -> BadgeResponse:
+    user = _get_user_by_email(session, user_email)
+    badge = _get_badge(session, user, badge_id)
     if request.name and request.name != badge.name:
         sibling = session.scalar(
             select(BadgeModel).where(
@@ -219,6 +368,8 @@ def update_badge(session: Session, badge_id: int, request: BadgeUpdateRequest) -
 
     if request.type is not None:
         badge.type = request.type.value
+    if request.tier is not None:
+        badge.tier = request.tier.value
     if request.progress is not None:
         badge.progress = request.progress
         badge.is_completed = badge.progress == 100
@@ -231,20 +382,23 @@ def update_badge(session: Session, badge_id: int, request: BadgeUpdateRequest) -
         id=badge.id,
         name=badge.name,
         type=badge.type,
+        tier=badge.tier,
         progress=badge.progress,
         is_completed=badge.is_completed,
         reason=badge.reason,
     )
 
 
-def delete_badge(session: Session, badge_id: int) -> None:
-    badge = _get_badge(session, badge_id)
+def delete_badge(session: Session, user_email: str, badge_id: int) -> None:
+    user = _get_user_by_email(session, user_email)
+    badge = _get_badge(session, user, badge_id)
     session.delete(badge)
     session.commit()
 
 
-def add_domain(session: Session, path_id: int, request: DomainCreateRequest) -> DomainResponse:
-    path = _get_path(session, path_id)
+def add_domain(session: Session, user_email: str, path_id: int, request: DomainCreateRequest) -> DomainResponse:
+    user = _get_user_by_email(session, user_email)
+    path = _get_path(session, user, path_id)
     if any(domain.name == request.name for domain in path.domains):
         raise ConflictError("A domain with this name already exists on the path.")
 
@@ -267,8 +421,9 @@ def add_domain(session: Session, path_id: int, request: DomainCreateRequest) -> 
     )
 
 
-def update_domain(session: Session, domain_id: int, request: DomainUpdateRequest) -> DomainResponse:
-    domain = _get_domain(session, domain_id)
+def update_domain(session: Session, user_email: str, domain_id: int, request: DomainUpdateRequest) -> DomainResponse:
+    user = _get_user_by_email(session, user_email)
+    domain = _get_domain(session, user, domain_id)
     if request.name and request.name != domain.name:
         sibling = session.scalar(
             select(DomainModel).where(
@@ -298,14 +453,16 @@ def update_domain(session: Session, domain_id: int, request: DomainUpdateRequest
     )
 
 
-def delete_domain(session: Session, domain_id: int) -> None:
-    domain = _get_domain(session, domain_id)
+def delete_domain(session: Session, user_email: str, domain_id: int) -> None:
+    user = _get_user_by_email(session, user_email)
+    domain = _get_domain(session, user, domain_id)
     session.delete(domain)
     session.commit()
 
 
-def process_action_log(session: Session, request: ActionLogRequest) -> ActionLogResponse:
-    path_models = session.scalars(_load_paths_query()).all()
+def process_action_log(session: Session, user_email: str, request: ActionLogRequest) -> ActionLogResponse:
+    user = _get_user_by_email(session, user_email)
+    path_models = session.scalars(_load_paths_query().where(PathModel.user_id == user.id)).all()
     if not path_models:
         raise AppError("No paths exist yet. Initialize at least one path first.")
 

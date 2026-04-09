@@ -17,6 +17,12 @@ class BadgeType(str, Enum):
     IDENTITY = "identity"
 
 
+class BadgeTier(str, Enum):
+    BRONZE = "bronze"
+    SILVER = "silver"
+    GOLD = "gold"
+
+
 class InitializePathRequest(BaseModel):
     route_name: str = Field(..., min_length=1)
     current_status: str = Field(..., min_length=1)
@@ -29,6 +35,55 @@ class InitializePathRequest(BaseModel):
         cleaned = value.strip()
         if not cleaned:
             raise ValueError("All input fields must be non-empty strings.")
+        return cleaned
+
+
+class AuthSessionResponse(BaseModel):
+    email: str
+
+
+class AuthRegisterRequest(BaseModel):
+    email: str = Field(..., min_length=3)
+    password: str = Field(..., min_length=6)
+
+    @field_validator("email", "password")
+    @classmethod
+    def validate_auth_text(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("Email and password must be non-empty strings.")
+        return cleaned
+
+
+class AuthLoginRequest(AuthRegisterRequest):
+    pass
+
+
+class AccountUpdateRequest(BaseModel):
+    current_email: str = Field(..., min_length=3)
+    current_password: str = Field(..., min_length=6)
+    new_email: str = Field(..., min_length=3)
+
+    @field_validator("current_email", "current_password", "new_email")
+    @classmethod
+    def validate_account_text(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("Account update fields must be non-empty strings.")
+        return cleaned
+
+
+class PasswordUpdateRequest(BaseModel):
+    email: str = Field(..., min_length=3)
+    current_password: str = Field(..., min_length=6)
+    new_password: str = Field(..., min_length=6)
+
+    @field_validator("email", "current_password", "new_password")
+    @classmethod
+    def validate_password_text(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("Password update fields must be non-empty strings.")
         return cleaned
 
 
@@ -55,6 +110,7 @@ class BadgeResponse(BaseModel):
     id: int
     name: str
     type: BadgeType
+    tier: BadgeTier
     progress: int
     is_completed: bool
     reason: str
@@ -135,6 +191,7 @@ class PathProgressUpdateRequest(BaseModel):
 class BadgeCreateRequest(BaseModel):
     name: str = Field(..., min_length=1)
     type: BadgeType
+    tier: BadgeTier | None = None
     progress: int = Field(default=0, ge=0, le=100)
     reason: str = Field(..., min_length=1)
 
@@ -142,6 +199,7 @@ class BadgeCreateRequest(BaseModel):
 class BadgeUpdateRequest(BaseModel):
     name: str | None = Field(default=None, min_length=1)
     type: BadgeType | None = None
+    tier: BadgeTier | None = None
     progress: int | None = Field(default=None, ge=0, le=100)
     reason: str | None = Field(default=None, min_length=1)
 
@@ -158,4 +216,3 @@ class DomainUpdateRequest(BaseModel):
     summary: str | None = None
     proficiency_rating: DomainProficiencyRating | None = None
     proficiency_reason: str | None = Field(default=None, min_length=1)
-
