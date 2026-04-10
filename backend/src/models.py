@@ -48,6 +48,10 @@ class PathModel(TimestampMixin, Base):
     lang: Mapped[str] = mapped_column(String(8), nullable=False, default="en")
     level: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     total_exp: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    last_opened_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
 
     user: Mapped["UserModel | None"] = relationship(back_populates="paths")
 

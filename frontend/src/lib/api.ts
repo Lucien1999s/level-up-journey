@@ -102,6 +102,10 @@ export function deletePath(pathId: number) {
   return request<void>(`/paths/${pathId}`, { method: "DELETE" });
 }
 
+export function openPath(pathId: number) {
+  return request<void>(`/paths/${pathId}/open`, { method: "POST" });
+}
+
 export function addDomain(
   pathId: number,
   payload: {

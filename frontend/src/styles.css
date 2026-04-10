@@ -425,29 +425,6 @@ button {
   margin-right: 0.6rem;
 }
 
-.share-trigger {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.48rem;
-  height: 28px;
-  padding: 0;
-  border-radius: 0;
-  border: none;
-  background: transparent;
-  color: var(--text);
-  font-weight: 600;
-  font-size: 0.92rem;
-}
-
-.share-trigger.busy {
-  opacity: 0.7;
-}
-
-.share-trigger svg {
-  width: 18px;
-  height: 18px;
-}
-
 .dashboard-shell {
   display: grid;
   grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
@@ -1011,6 +988,39 @@ button {
   padding-bottom: 1rem;
 }
 
+.skill-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+}
+
+.skill-view-toggle {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.22rem;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.045);
+}
+
+.skill-view-chip {
+  width: 2rem;
+  height: 2rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 0.92rem;
+  line-height: 1;
+}
+
+.skill-view-chip.active {
+  background: rgba(223, 192, 122, 0.16);
+  color: var(--text);
+}
+
 .skills-scroll,
 .update-scroll {
   height: 100%;
@@ -1018,6 +1028,11 @@ button {
   overflow: auto;
   padding-right: 0.2rem;
   padding-bottom: 0;
+}
+
+.skills-scroll.static {
+  overflow: hidden;
+  padding-right: 0;
 }
 
 .skills-grid {
@@ -1079,6 +1094,72 @@ button {
   background: rgba(255, 255, 255, 0.06);
   color: var(--accent-strong);
   font-size: 0.78rem;
+  white-space: nowrap;
+}
+
+.skills-rpg-shell {
+  display: grid;
+  gap: 0.7rem;
+  align-content: start;
+  min-height: 100%;
+}
+
+.skills-rpg-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(180px, 1fr) auto;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.88rem 0.95rem;
+  border-radius: 20px;
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  background:
+    linear-gradient(180deg, rgba(223, 192, 122, 0.06), rgba(255, 255, 255, 0.02)),
+    rgba(255, 255, 255, 0.022);
+  color: var(--text);
+  text-align: left;
+}
+
+.skills-rpg-copy {
+  display: grid;
+  gap: 0.18rem;
+}
+
+.skills-rpg-copy strong {
+  font-size: 0.96rem;
+  line-height: 1.25;
+}
+
+.skills-rpg-copy span {
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.skills-rpg-bar {
+  position: relative;
+  height: 16px;
+  border-radius: 999px;
+  background:
+    linear-gradient(90deg, rgba(255, 255, 255, 0.07) 0 14%, transparent 14% 16%),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.07) 16% 30%, transparent 30% 32%),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.07) 32% 46%, transparent 46% 48%),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.07) 48% 62%, transparent 62% 64%),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.07) 64% 78%, transparent 78% 80%),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.07) 80% 94%, transparent 94% 100%);
+  overflow: hidden;
+}
+
+.skills-rpg-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--text), rgba(255, 255, 255, 0.9));
+  box-shadow: 0 0 18px rgba(255, 255, 255, 0.18);
+}
+
+.skills-rpg-row small {
+  color: var(--accent-strong);
+  font-size: 0.82rem;
+  font-weight: 700;
   white-space: nowrap;
 }
 
@@ -1309,7 +1390,7 @@ button {
 
 .settings-hero {
   padding-top: 0.15rem;
-  padding-bottom: 0.65rem;
+  padding-bottom: 0.9rem;
 }
 
 .level-track-head {
@@ -1460,20 +1541,24 @@ button {
 
 .settings-layout {
   display: grid;
-  gap: 0.8rem;
+  gap: 1.15rem;
 }
 
 .settings-card {
   display: grid;
-  gap: 0.8rem;
-  padding: 0.9rem 1rem;
-  border-radius: 22px;
-  border: 1px solid rgba(255, 255, 255, 0.07);
-  background: rgba(255, 255, 255, 0.035);
+  gap: 0.75rem;
+  padding: 0;
+  border: none;
+  background: transparent;
+}
+
+.settings-card + .settings-card {
+  padding-top: 0.95rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
 }
 
 .settings-card-compact {
-  gap: 0.6rem;
+  gap: 0.55rem;
 }
 
 .settings-card .language-toggle {
@@ -1483,17 +1568,16 @@ button {
 }
 
 .settings-language-card {
-  width: fit-content;
-  min-width: 0;
+  justify-items: start;
 }
 
 .settings-card .language-pill {
-  padding: 0.56rem 0.85rem;
+  padding: 0.54rem 0.82rem;
 }
 
 .settings-row-head {
   display: flex;
-  align-items: center;
+  align-items: baseline;
   justify-content: space-between;
   gap: 1rem;
 }
@@ -1519,8 +1603,8 @@ button {
 
 .account-overview {
   display: grid;
-  gap: 0.55rem;
-  padding: 0.05rem 0 0.1rem;
+  gap: 0;
+  padding: 0.05rem 0 0.15rem;
 }
 
 .account-line {
@@ -1528,10 +1612,8 @@ button {
   align-items: center;
   justify-content: space-between;
   gap: 1rem;
-  padding: 0.82rem 0.95rem;
-  border-radius: 18px;
-  background: rgba(255, 255, 255, 0.038);
-  border: 1px solid rgba(255, 255, 255, 0.06);
+  padding: 0.9rem 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
 }
 
 .account-line span {
@@ -1550,17 +1632,19 @@ button {
 .settings-submit-row {
   display: flex;
   justify-content: flex-end;
-  padding-top: 0.15rem;
+  padding-top: 0.25rem;
 }
 
 .settings-footer {
   display: flex;
   justify-content: flex-end;
-  padding-top: 0.15rem;
+  padding-top: 0.4rem;
 }
 
 .settings-footer .danger-button {
-  padding: 0.82rem 0.98rem;
+  padding: 0.7rem 0.9rem;
+  border-color: rgba(240, 139, 139, 0.2);
+  background: rgba(240, 139, 139, 0.08);
 }
 
 .success-text {

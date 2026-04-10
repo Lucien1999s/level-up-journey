@@ -42,6 +42,14 @@ def init_db() -> None:
                     "ADD COLUMN user_id INTEGER NULL"
                 )
             )
+    if "last_opened_at" not in path_columns:
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    "ALTER TABLE paths "
+                    "ADD COLUMN last_opened_at TIMESTAMP NULL"
+                )
+            )
 
     badge_columns = {column["name"] for column in inspector.get_columns("badges")}
     if "tier" not in badge_columns:

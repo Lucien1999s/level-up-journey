@@ -19,6 +19,7 @@ from src.logic import (
     login_account,
     process_action_log,
     register_account,
+    touch_path,
     update_account_email,
     update_account_password,
     update_badge,
@@ -160,6 +161,19 @@ def get_path(
         return get_path_detail(session, user_email, path_id)
     except AppError as error:
         handle_app_error(error)
+
+
+@app.post("/paths/{path_id}/open", status_code=status.HTTP_204_NO_CONTENT)
+def open_path(
+    path_id: int,
+    user_email: str = Depends(get_current_user_email),
+    session: Session = Depends(get_db),
+) -> Response:
+    try:
+        touch_path(session, user_email, path_id)
+    except AppError as error:
+        handle_app_error(error)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @app.delete("/paths/{path_id}", status_code=status.HTTP_204_NO_CONTENT)

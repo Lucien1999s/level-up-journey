@@ -2,6 +2,7 @@ from random import choice
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
+from sqlalchemy.sql import func
 
 from src.leveling import cumulative_xp_for_level, level_for_total_xp, xp_to_next_level
 from src.models import BadgeModel, DomainModel, PathModel, UserModel
@@ -67,7 +68,19 @@ def _scaled_base_exp(level: int) -> int:
 
 
 def _scaled_bonus_exp(level: int, bonus_exp: int) -> int:
-    level_factor = (1 + (max(level, 1) / 100)) * 2
+    normalized_level = max(level, 1)
+    if normalized_level <= 20:
+        bonus_multiplier = 2.0
+    elif normalized_level <= 40:
+        bonus_multiplier = 2.7
+    elif normalized_level <= 60:
+        bonus_multiplier = 3.2
+    elif normalized_level <= 80:
+        bonus_multiplier = 3.7
+    else:
+        bonus_multiplier = 4.2
+
+    level_factor = (1 + (normalized_level / 100)) * bonus_multiplier
     return round(bonus_exp * level_factor)
 
 
@@ -78,7 +91,11 @@ def _load_paths_query():
             selectinload(PathModel.domains),
             selectinload(PathModel.badges),
         )
-        .order_by(PathModel.id)
+        .order_by(
+            PathModel.last_opened_at.desc().nullslast(),
+            PathModel.updated_at.desc(),
+            PathModel.id.desc(),
+        )
     )
 
 
@@ -265,6 +282,7 @@ def initialize_path(session: Session, user_email: str, request: InitializePathRe
         lang=request.lang,
         level=draft.level,
         total_exp=cumulative_xp_for_level(draft.level),
+        last_opened_at=func.now(),
     )
     session.add(path)
     session.flush()
@@ -307,6 +325,13 @@ def get_all_paths(session: Session, user_email: str) -> JourneyDataResponse:
 def get_path_detail(session: Session, user_email: str, path_id: int) -> PathDetailResponse:
     user = _get_user_by_email(session, user_email)
     return _serialize_path(_get_path(session, user, path_id))
+
+
+def touch_path(session: Session, user_email: str, path_id: int) -> None:
+    user = _get_user_by_email(session, user_email)
+    path = _get_path(session, user, path_id)
+    path.last_opened_at = func.now()
+    session.commit()
 
 
 def delete_path(session: Session, user_email: str, path_id: int) -> None:

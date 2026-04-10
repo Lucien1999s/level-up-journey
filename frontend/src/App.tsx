@@ -9,6 +9,7 @@ import {
   deletePath,
   fetchPaths,
   loginAccount,
+  openPath,
   processActionLog,
   registerAccount,
   updateAccount,
@@ -25,7 +26,6 @@ import {
 } from "./lib/auth";
 import { text } from "./lib/i18n";
 import { getLevelProgress, getMilestones, getRankTitle } from "./lib/leveling";
-import { exportPathPdf } from "./lib/pdf";
 import type {
   ActionLogResponse,
   Badge,
@@ -38,6 +38,7 @@ import type {
 } from "./types";
 
 type AuthMode = "login" | "register";
+type SkillView = "list" | "rpg";
 
 const proficiencyOptions: DomainProficiencyRating[] = [
   "Initiate",
@@ -69,6 +70,14 @@ const proficiencyLabels: Record<Locale, Record<DomainProficiencyRating, string>>
 
 const badgeTiers: BadgeTier[] = ["bronze", "silver", "gold"];
 const BADGES_PER_PAGE = 3;
+const proficiencyScoreMap: Record<DomainProficiencyRating, number> = {
+  Initiate: 1,
+  Apprentice: 2,
+  Practitioner: 3,
+  Specialist: 4,
+  Expert: 5,
+  Master: 6,
+};
 
 function randomBadgeTier(): BadgeTier {
   return badgeTiers[Math.floor(Math.random() * badgeTiers.length)] ?? "bronze";
@@ -94,6 +103,62 @@ function getPathMonogram(name: string) {
   if (!parts.length) return "P";
   if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
   return `${parts[0][0]}${parts[1][0]}`.toUpperCase();
+}
+
+function getProficiencyScore(rating: DomainProficiencyRating) {
+  return proficiencyScoreMap[rating];
+}
+
+function getProficiencyPercent(rating: DomainProficiencyRating) {
+  return Math.round((getProficiencyScore(rating) / 6) * 100);
+}
+
+function sortPathsByRecent(records: PathRecord[], recentIds: number[]) {
+  if (!recentIds.length) return records;
+
+  const recordMap = new Map(records.map((record) => [record.path.id, record]));
+  const ordered = recentIds
+    .map((id) => recordMap.get(id))
+    .filter((record): record is PathRecord => Boolean(record));
+  const usedIds = new Set(ordered.map((record) => record.path.id));
+  const remaining = records.filter((record) => !usedIds.has(record.path.id));
+
+  return [...ordered, ...remaining];
+}
+
+function RpgSkillsView({
+  domains,
+  locale,
+  onSelect,
+}: {
+  domains: Domain[];
+  locale: Locale;
+  onSelect: (domain: Domain) => void;
+}) {
+  return (
+    <div className="skills-rpg-shell">
+      {domains.map((domain) => {
+        const fill = getProficiencyPercent(domain.proficiency_rating);
+        return (
+          <button
+            className="skills-rpg-row"
+            key={domain.id}
+            onClick={() => onSelect(domain)}
+            type="button"
+          >
+            <div className="skills-rpg-copy">
+              <strong>{domain.name}</strong>
+              <span>{getProficiencyLabel(domain.proficiency_rating, locale)}</span>
+            </div>
+            <div className="skills-rpg-bar">
+              <div className="skills-rpg-fill" style={{ width: `${fill}%` }} />
+            </div>
+            <small>{fill}%</small>
+          </button>
+        );
+      })}
+    </div>
+  );
 }
 
 function Modal({
@@ -132,6 +197,7 @@ function App() {
 
   const [paths, setPaths] = useState<PathRecord[]>([]);
   const [selectedPathId, setSelectedPathId] = useState<number | null>(null);
+  const [recentPathIds, setRecentPathIds] = useState<number[]>([]);
   const [loadingPaths, setLoadingPaths] = useState(false);
   const [requestError, setRequestError] = useState("");
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
@@ -140,7 +206,6 @@ function App() {
   const [actionBusy, setActionBusy] = useState(false);
   const [pathBusy, setPathBusy] = useState(false);
   const [editorBusy, setEditorBusy] = useState(false);
-  const [shareBusy, setShareBusy] = useState(false);
   const [settingsBusy, setSettingsBusy] = useState<"email" | "password" | null>(null);
   const [settingsEditor, setSettingsEditor] = useState<"email" | "password" | null>(null);
   const [settingsError, setSettingsError] = useState("");
@@ -179,6 +244,7 @@ function App() {
   });
   const [badgeVisibility, setBadgeVisibility] = useState<"pending" | "completed">("pending");
   const [badgePage, setBadgePage] = useState(0);
+  const [skillView, setSkillView] = useState<SkillView>("rpg");
 
   const [domainModal, setDomainModal] = useState<{
     domain: Domain | null;
@@ -262,8 +328,13 @@ function App() {
     setSessionEmail(null);
     setPaths([]);
     setSelectedPathId(null);
+    setRecentPathIds([]);
     setSettingsOpen(false);
     setRequestError(locale === "zh" ? "登入狀態已失效，請重新登入。" : "Your session expired. Please sign in again.");
+  }
+
+  function prioritizePath(pathId: number) {
+    setRecentPathIds((current) => [pathId, ...current.filter((id) => id !== pathId)]);
   }
 
   function resolveRequestError(error: unknown) {
@@ -275,17 +346,26 @@ function App() {
     return message;
   }
 
-  async function loadPaths() {
+  async function loadPaths(preferredPathId?: number) {
     setLoadingPaths(true);
     setRequestError("");
 
     try {
       const data = await fetchPaths();
-      setPaths(data.paths);
+      const nextRecentIds = preferredPathId
+        ? [preferredPathId, ...recentPathIds.filter((id) => id !== preferredPathId)]
+        : recentPathIds;
+      const orderedPaths = sortPathsByRecent(data.paths, nextRecentIds);
+
+      setPaths(orderedPaths);
+      setRecentPathIds(orderedPaths.map((record) => record.path.id));
       setSelectedPathId((current) => {
-        if (!data.paths.length) return null;
-        if (current && data.paths.some((item) => item.path.id === current)) return current;
-        return data.paths[0].path.id;
+        if (!orderedPaths.length) return null;
+        if (preferredPathId && orderedPaths.some((item) => item.path.id === preferredPathId)) {
+          return preferredPathId;
+        }
+        if (current && orderedPaths.some((item) => item.path.id === current)) return current;
+        return orderedPaths[0].path.id;
       });
     } catch (error) {
       const message = resolveRequestError(error);
@@ -383,10 +463,11 @@ function App() {
     setRequestError("");
 
     try {
-      await createPath({ ...pathForm, lang: locale });
+      const createdPath = await createPath({ ...pathForm, lang: locale });
       setCreatePathOpen(false);
       setPathForm({ route_name: "", current_status: "", past_achievements: "" });
-      await loadPaths();
+      prioritizePath(createdPath.path.id);
+      await loadPaths(createdPath.path.id);
     } catch (error) {
       const message = resolveRequestError(error);
       if (message) setRequestError(message);
@@ -421,6 +502,7 @@ function App() {
     setEditorBusy(true);
     try {
       await deletePath(pendingDeletePath.path.id);
+      setRecentPathIds((current) => current.filter((id) => id !== pendingDeletePath.path.id));
       setPendingDeletePath(null);
       await loadPaths();
     } catch (error) {
@@ -428,6 +510,22 @@ function App() {
       if (message) setRequestError(message);
     } finally {
       setEditorBusy(false);
+    }
+  }
+
+  async function handlePathSelect(pathId: number) {
+    setSelectedPathId(pathId);
+    prioritizePath(pathId);
+    setPaths((current) =>
+      sortPathsByRecent(current, [pathId, ...recentPathIds.filter((id) => id !== pathId)]),
+    );
+
+    try {
+      await openPath(pathId);
+      await loadPaths(pathId);
+    } catch (error) {
+      const message = resolveRequestError(error);
+      if (message) setRequestError(message);
     }
   }
 
@@ -508,6 +606,7 @@ function App() {
     setSessionEmail(null);
     setPaths([]);
     setSelectedPathId(null);
+    setRecentPathIds([]);
     setSettingsOpen(false);
     setSettingsError("");
     setSettingsMessage("");
@@ -562,25 +661,6 @@ function App() {
       setSettingsError(error instanceof Error ? error.message : t("backendError"));
     } finally {
       setSettingsBusy(null);
-    }
-  }
-
-  async function handleSharePath() {
-    if (!selectedPath || shareBusy) return;
-    setShareBusy(true);
-    setRequestError("");
-
-    try {
-      await exportPathPdf({
-        locale,
-        pathRecord: selectedPath,
-        rankTitle: getRankTitle(selectedPath.path.level, locale),
-        proficiencyLabel: (rating) => getProficiencyLabel(rating, locale),
-      });
-    } catch (error) {
-      setRequestError(error instanceof Error ? error.message : t("shareFailed"));
-    } finally {
-      setShareBusy(false);
     }
   }
 
@@ -694,22 +774,6 @@ function App() {
 
         <div className="topbar-actions">
           <button
-            className={shareBusy ? "share-trigger busy" : "share-trigger"}
-            type="button"
-            aria-label={shareBusy ? t("sharePreparing") : t("share")}
-            title={shareBusy ? t("sharePreparing") : t("share")}
-            onClick={handleSharePath}
-            disabled={!selectedPath || shareBusy}
-          >
-            <svg aria-hidden="true" viewBox="0 0 24 24">
-              <path
-                d="M12 3l4 4h-3v7h-2V7H8l4-4zm-7 11h2v4h10v-4h2v5a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2v-5z"
-                fill="currentColor"
-              />
-            </svg>
-            <span>{t("share")}</span>
-          </button>
-          <button
             className="settings-trigger"
             onClick={() => {
               setSettingsError("");
@@ -758,7 +822,9 @@ function App() {
                 <button
                   className={sidebarCollapsed ? (active ? "path-item compact active" : "path-item compact") : active ? "path-item active" : "path-item"}
                   key={entry.path.id}
-                  onClick={() => setSelectedPathId(entry.path.id)}
+                  onClick={() => {
+                    void handlePathSelect(entry.path.id);
+                  }}
                   type="button"
                   title={entry.path.name}
                 >
@@ -845,40 +911,70 @@ function App() {
                     <div>
                       <h3>{t("skills")}</h3>
                     </div>
-                    <button
-                      className={
-                        editorBusy
-                          ? "secondary-button icon-action-button ai-button busy"
-                          : "secondary-button icon-action-button ai-button"
-                      }
-                      onClick={() => openDomainCreate(selectedPath.path.id)}
-                      type="button"
-                      aria-label={t("addSkill")}
-                      title={t("addSkill")}
-                    >
-                      +
-                    </button>
+                    <div className="skill-toolbar">
+                      <div className="skill-view-toggle" aria-label={t("skills")}>
+                        <button
+                          className={skillView === "list" ? "skill-view-chip active" : "skill-view-chip"}
+                          onClick={() => setSkillView("list")}
+                          type="button"
+                          aria-label={t("skillsListView")}
+                          title={t("skillsListView")}
+                        >
+                          ☰
+                        </button>
+                        <button
+                          className={skillView === "rpg" ? "skill-view-chip active" : "skill-view-chip"}
+                          onClick={() => setSkillView("rpg")}
+                          type="button"
+                          aria-label={t("skillsRpgView")}
+                          title={t("skillsRpgView")}
+                        >
+                          ⚔
+                        </button>
+                      </div>
+                      <button
+                        className={
+                          editorBusy
+                            ? "secondary-button icon-action-button ai-button busy"
+                            : "secondary-button icon-action-button ai-button"
+                        }
+                        onClick={() => openDomainCreate(selectedPath.path.id)}
+                        type="button"
+                        aria-label={t("addSkill")}
+                        title={t("addSkill")}
+                      >
+                        +
+                      </button>
+                    </div>
                   </div>
 
                   {selectedPath.domains.length ? (
                     <div className="skills-scroll">
-                      <div className="skills-grid single-column">
-                        {selectedPath.domains.map((domain, index) => (
-                          <button
-                            className="skill-card compact"
-                            key={domain.id}
-                            onClick={() => openDomainView(selectedPath.path.id, domain)}
-                            style={{ animationDelay: `${index * 60}ms` }}
-                            type="button"
-                          >
-                            <div className="skill-card-top">
-                              <strong>{domain.name}</strong>
-                              <span className="skill-tier">{getProficiencyLabel(domain.proficiency_rating, locale)}</span>
-                            </div>
-                            <p>{domain.proficiency_reason}</p>
-                          </button>
-                        ))}
-                      </div>
+                      {skillView === "list" ? (
+                        <div className="skills-grid single-column">
+                          {selectedPath.domains.map((domain, index) => (
+                            <button
+                              className="skill-card compact"
+                              key={domain.id}
+                              onClick={() => openDomainView(selectedPath.path.id, domain)}
+                              style={{ animationDelay: `${index * 60}ms` }}
+                              type="button"
+                            >
+                              <div className="skill-card-top">
+                                <strong>{domain.name}</strong>
+                                <span className="skill-tier">{getProficiencyLabel(domain.proficiency_rating, locale)}</span>
+                              </div>
+                              <p>{domain.proficiency_reason}</p>
+                            </button>
+                          ))}
+                        </div>
+                      ) : (
+                        <RpgSkillsView
+                          domains={selectedPath.domains}
+                          locale={locale}
+                          onSelect={(domain) => openDomainView(selectedPath.path.id, domain)}
+                        />
+                      )}
                     </div>
                   ) : (
                     <p className="empty-copy">{t("emptySkills")}</p>
@@ -1036,28 +1132,6 @@ function App() {
             <h2>{t("settings")}</h2>
           </div>
           <div className="settings-layout">
-            <section className="settings-card settings-card-compact settings-language-card">
-              <div className="settings-row-head">
-                <h3>{t("language")}</h3>
-              </div>
-              <div className="language-toggle">
-                <button
-                  className={locale === "en" ? "language-pill active" : "language-pill"}
-                  onClick={() => setLocale("en")}
-                  type="button"
-                >
-                  {t("english")}
-                </button>
-                <button
-                  className={locale === "zh" ? "language-pill active" : "language-pill"}
-                  onClick={() => setLocale("zh")}
-                  type="button"
-                >
-                  {t("chinese")}
-                </button>
-              </div>
-            </section>
-
             <section className="settings-card">
               <div className="settings-row-head">
                 <h3>{t("accountSettings")}</h3>
@@ -1179,6 +1253,28 @@ function App() {
                   </div>
                 </form>
               ) : null}
+            </section>
+
+            <section className="settings-card settings-card-compact settings-language-card">
+              <div className="settings-row-head">
+                <h3>{t("language")}</h3>
+              </div>
+              <div className="language-toggle">
+                <button
+                  className={locale === "en" ? "language-pill active" : "language-pill"}
+                  onClick={() => setLocale("en")}
+                  type="button"
+                >
+                  {t("english")}
+                </button>
+                <button
+                  className={locale === "zh" ? "language-pill active" : "language-pill"}
+                  onClick={() => setLocale("zh")}
+                  type="button"
+                >
+                  {t("chinese")}
+                </button>
+              </div>
             </section>
           </div>
           {settingsError ? <p className="error-text">{settingsError}</p> : null}
